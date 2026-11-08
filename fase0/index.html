@@ -23,10 +23,20 @@
     <h2>2. Modello</h2>
     <p>Seleziona <code>gemma-3n-E2B-it-int4-Web.litertlm</code> dalla cartella Download. La prima volta viene copiato nella memoria della pagina (alcuni minuti); poi non serve più.</p>
     <label class="file">Scegli file modello<input type="file" id="model-file"></label>
+    <pre id="crash-out" class="out"></pre>
     <div class="row">
-      <label><input type="checkbox" id="opt-image" checked> immagini</label>
-      <label><input type="checkbox" id="opt-audio" checked> audio</label>
+      <label><input type="checkbox" id="opt-image"> immagini</label>
+      <label><input type="checkbox" id="opt-audio"> audio</label>
+      <label>contesto
+        <select id="opt-tokens">
+          <option value="1024">1024</option>
+          <option value="2048" selected>2048</option>
+          <option value="4096">4096</option>
+        </select>
+      </label>
+      <button id="btn-log-clear" class="secondary">Azzera registro</button>
     </div>
+    <p class="hint">Prova prima solo testo (immagini e audio spenti). Se funziona, ricarica la pagina e attiva le immagini.</p>
     <div class="row">
       <button id="btn-load" disabled>Carica modello</button>
       <button id="btn-forget" class="secondary">Elimina copia salvata</button>

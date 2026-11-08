@@ -105,9 +105,24 @@ function parseJSON(text) {
   try { return { ok: true, valore: JSON.parse(t.slice(a, b + 1)) }; } catch { return { ok: false, valore: {} }; }
 }
 
+// ---------- diagnostica: registro che sopravvive a un crash della scheda ----------
+
+const LOG_KEY = 'fb0_log';
+function traccia(passo, extra = {}) {
+  try {
+    const log = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+    log.push({ t: new Date().toISOString(), passo, ...extra });
+    localStorage.setItem(LOG_KEY, JSON.stringify(log.slice(-40)));
+  } catch { /* storage non disponibile */ }
+}
+function ultimoLog() {
+  try { return JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { return []; }
+}
+
 // ---------- esecuzione con misure ----------
 
 async function genera(prompt) {
+  traccia('generazione-inizio', { tipo: Array.isArray(prompt) ? 'multimodale' : 'testo' });
   const t0 = performance.now();
   let tFirst = null;
   const out = await state.llm.generateResponse(prompt, (partial) => {
@@ -117,6 +132,7 @@ async function genera(prompt) {
   let tokOut = null;
   try { tokOut = state.llm.sizeInTokens(out) ?? null; } catch { /* non disponibile */ }
   const genSec = (t1 - (tFirst ?? t0)) / 1000;
+  traccia('generazione-fine', { ms: Math.round(t1 - t0) });
   return {
     testo: out,
     ms_totali: Math.round(t1 - t0),
@@ -239,7 +255,9 @@ async function caricaModello() {
     const scelto = $('model-file').files[0];
     if (scelto) {
       out.textContent = `Copio ${scelto.name} (${Math.round(scelto.size / 1e6)} MB) nella memoria della pagina…`;
+      traccia('copia-inizio', { MB: Math.round(scelto.size / 1e6) });
       await copiaInOPFS(scelto);
+      traccia('copia-fine');
     }
     const root = await navigator.storage.getDirectory();
     const file = await (await root.getFileHandle(OPFS_NAME)).getFile();
@@ -248,10 +266,11 @@ async function caricaModello() {
     const immagini = $('opt-image').checked;
     const audio = $('opt-audio').checked;
     const t0 = performance.now();
+    traccia('avvio-inizio', { immagini, audio, maxTokens: +$('opt-tokens').value });
     const fileset = await FilesetResolver.forGenAiTasks(WASM_PATH);
     state.llm = await LlmInference.createFromOptions(fileset, {
       baseOptions: { modelAssetBuffer: file.stream().getReader() },
-      maxTokens: 4096,
+      maxTokens: +$('opt-tokens').value,
       topK: 1,
       temperature: 0,
       randomSeed: 1,
@@ -259,10 +278,12 @@ async function caricaModello() {
       supportAudio: audio,
     });
     const ms = Math.round(performance.now() - t0);
+    traccia('avvio-fine', { ms });
     state.results.modello = { nome: scelto?.name ?? '(copia salvata)', MB: Math.round(file.size / 1e6), ms_caricamento: ms, immagini, audio };
     out.textContent = `Modello pronto in ${(ms / 1000).toFixed(1)} s.`;
     abilita(true);
   } catch (e) {
+    traccia('avvio-errore', { errore: String(e.message || e) });
     out.textContent = `Errore: ${e.message || e}`;
     state.results.modello = { errore: String(e.message || e) };
   } finally {
@@ -433,6 +454,15 @@ function init() {
     for (const id of ['text-results', 'photo-results', 'audio-results']) $(id).innerHTML = '';
     aggiornaSommario();
   };
+
+  const log = ultimoLog();
+  const ultimo = log[log.length - 1];
+  if (ultimo && !['avvio-fine', 'generazione-fine', 'avvio-errore'].includes(ultimo.passo)) {
+    $('crash-out').textContent = `⚠ La sessione precedente si è interrotta durante: ${ultimo.passo} (${ultimo.t}).\n` +
+      log.slice(-8).map((l) => `${l.t.slice(11, 19)} ${l.passo} ${JSON.stringify({ ...l, t: undefined, passo: undefined })}`).join('\n');
+  }
+  state.results.log_precedente = log;
+  $('btn-log-clear').onclick = () => { localStorage.removeItem(LOG_KEY); $('crash-out').textContent = ''; };
 
   statoCopia().then((s) => {
     if (s.presente) {
