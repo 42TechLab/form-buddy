@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FORM_BUDDY · Test Fase 0</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>FORM_BUDDY · Test Fase 0</h1>
+  <p class="sub">Gemma 3n sul telefono: velocità, comprensione del parlato, lettura delle foto. Tutto resta sul dispositivo.</p>
+</header>
+
+<main>
+  <section id="sec-env">
+    <h2>1. Ambiente</h2>
+    <button id="btn-env">Controlla</button>
+    <pre id="env-out" class="out"></pre>
+  </section>
+
+  <section id="sec-model">
+    <h2>2. Modello</h2>
+    <p>Seleziona <code>gemma-3n-E2B-it-int4-Web.litertlm</code> dalla cartella Download. La prima volta viene copiato nella memoria della pagina (alcuni minuti); poi non serve più.</p>
+    <label class="file">Scegli file modello<input type="file" id="model-file"></label>
+    <div class="row">
+      <label><input type="checkbox" id="opt-image" checked> immagini</label>
+      <label><input type="checkbox" id="opt-audio" checked> audio</label>
+    </div>
+    <div class="row">
+      <button id="btn-load" disabled>Carica modello</button>
+      <button id="btn-forget" class="secondary">Elimina copia salvata</button>
+    </div>
+    <progress id="model-progress" max="1" value="0" hidden></progress>
+    <pre id="model-out" class="out"></pre>
+  </section>
+
+  <section id="sec-text">
+    <h2>3. Frasi dettate (testo)</h2>
+    <p>20 frasi informali con dati di fantasia. Misura correttezza e tempi.</p>
+    <div class="row">
+      <button id="btn-text-all" disabled>Esegui tutte</button>
+      <button id="btn-text-stop" class="secondary" disabled>Ferma</button>
+    </div>
+    <div class="row">
+      <input id="text-free" placeholder="Oppure scrivi una frase libera…">
+      <button id="btn-text-free" disabled>Invia</button>
+    </div>
+    <div id="text-results"></div>
+  </section>
+
+  <section id="sec-photo">
+    <h2>4. Foto e documenti</h2>
+    <p>Seleziona una o più foto del set 26237LOM (o altre). Il caso di test viene riconosciuto dal nome del file.</p>
+    <div class="row">
+      <label>Risoluzione
+        <select id="photo-res">
+          <option value="768" selected>768 px</option>
+          <option value="1024">1024 px</option>
+          <option value="1536">1536 px</option>
+        </select>
+      </label>
+    </div>
+    <label class="file">Scegli foto<input type="file" id="photo-file" accept="image/*" multiple></label>
+    <label class="file">Scatta foto<input type="file" id="photo-cam" accept="image/*" capture="environment"></label>
+    <div id="photo-results"></div>
+  </section>
+
+  <section id="sec-audio">
+    <h2>5. Voce</h2>
+    <p>Scegli una frase, premi Registra, leggila ad alta voce in modo naturale, premi Stop.</p>
+    <select id="audio-case"></select>
+    <div class="row">
+      <button id="btn-rec" disabled>Registra</button>
+      <button id="btn-rec-stop" class="secondary" disabled>Stop</button>
+    </div>
+    <div id="audio-results"></div>
+  </section>
+
+  <section id="sec-report">
+    <h2>6. Risultati</h2>
+    <pre id="summary" class="out"></pre>
+    <div class="row">
+      <button id="btn-download">Scarica risultati (JSON)</button>
+      <button id="btn-clear" class="secondary">Azzera</button>
+    </div>
+    <p class="hint">Salva il file nella cartella OneDrive <code>FORM_BUDDY</code> e avvisami: lo analizzo io.</p>
+  </section>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

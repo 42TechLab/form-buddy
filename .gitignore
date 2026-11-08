@@ -1,0 +1,8 @@
+# Repository pubblico: si pubblica SOLO ciò che è elencato qui sotto.
+# Tutto il resto (esempi, foto, documenti, archivi, SPEC con dati dei clienti,
+# script privati) resta solo in locale / OneDrive.
+/*
+!/.gitignore
+!/.nojekyll
+!/README.md
+!/fase0/
