@@ -21,7 +21,7 @@
 
   <section id="sec-model">
     <h2>2. Modello</h2>
-    <p>Seleziona <code>gemma-3n-E2B-it-int4-Web.litertlm</code> dalla cartella Download. La prima volta viene copiato nella memoria della pagina (alcuni minuti); poi non serve più.</p>
+    <p id="model-hint">Seleziona <code>gemma-3n-E2B-it-int4-Web.litertlm</code> dalla cartella Download. La prima volta viene copiato nella memoria della pagina (alcuni minuti); poi non serve più.</p>
     <label class="file">Scegli file modello<input type="file" id="model-file"></label>
     <pre id="crash-out" class="out"></pre>
     <div class="row">
@@ -35,6 +35,14 @@
         </select>
       </label>
       <button id="btn-log-clear" class="secondary">Azzera registro</button>
+    </div>
+    <div class="row" id="backend-row" hidden>
+      <label>processore
+        <select id="opt-backend">
+          <option value="gpu" selected>GPU</option>
+          <option value="cpu">CPU</option>
+        </select>
+      </label>
     </div>
     <p class="hint">Prova prima solo testo (immagini e audio spenti). Se funziona, ricarica la pagina e attiva le immagini.</p>
     <div class="row">

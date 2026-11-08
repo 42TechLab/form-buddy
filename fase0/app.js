@@ -2,10 +2,14 @@
 // Esegue Gemma 3n on-device (MediaPipe LLM Inference, WebGPU) e misura
 // estrazione di campi da testo, foto e voce. Nessun dato lascia il dispositivo.
 
-import { FilesetResolver, LlmInference } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@0.10.30/genai_bundle.mjs';
+// Nell'app Android (Capacitor) usa il motore nativo LiteRT-LM tramite il plugin "Llm";
+// nel browser usa MediaPipe (caricato solo se serve).
 import { CATALOGO, CASI_TESTO, CASI_FOTO } from './casi.js';
 
+const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@0.10.30/genai_bundle.mjs';
 const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@0.10.30/wasm';
+const NATIVO = !!window.Capacitor?.isNativePlatform?.();
+const Llm = NATIVO ? window.Capacitor.Plugins.Llm : null;
 const OPFS_NAME = 'modello.litertlm';
 const $ = (id) => document.getElementById(id);
 
@@ -77,24 +81,48 @@ Rispondi SOLO con un oggetto JSON piatto {"chiave": valore}. Se non trovi nulla 
 Catalogo dei campi:
 ${catalogoTesto()}`;
 
+// Un prompt è { testo, canvas?, audio? }; ogni motore lo traduce nel proprio formato.
 function promptTesto(frase) {
-  return `<start_of_turn>user\n${ISTRUZIONI}\n\nInput dettato:\n"${frase}"<end_of_turn>\n<start_of_turn>model\n`;
+  return { testo: `${ISTRUZIONI}\n\nInput dettato:\n"${frase}"` };
 }
 
 function promptFoto(canvas) {
-  return [
-    `<start_of_turn>user\n${ISTRUZIONI}\n\nInput: la foto seguente (targhetta, documento o vista del mezzo). Leggi con attenzione ogni carattere; se la foto non contiene dati leggibili rispondi {}.\n`,
-    { imageSource: canvas },
-    '<end_of_turn>\n<start_of_turn>model\n',
-  ];
+  return { testo: `${ISTRUZIONI}\n\nInput: la foto allegata (targhetta, documento o vista del mezzo). Leggi con attenzione ogni carattere; se la foto non contiene dati leggibili rispondi {}.`, canvas };
 }
 
-function promptAudio(url) {
-  return [
-    `<start_of_turn>user\n${ISTRUZIONI}\n\nInput: la registrazione audio seguente, in italiano. Rispondi con un JSON {"trascrizione": "testo esatto ascoltato", "campi": {chiave: valore}}.\n`,
-    { audioSource: url },
-    '<end_of_turn>\n<start_of_turn>model\n',
-  ];
+function promptAudio(blob) {
+  return { testo: `${ISTRUZIONI}\n\nInput: la registrazione audio allegata, in italiano. Rispondi con un JSON {"trascrizione": "testo esatto ascoltato", "campi": {chiave: valore}}.`, audio: blob };
+}
+
+function perMediaPipe(p) {
+  const head = `<start_of_turn>user\n${p.testo}\n`;
+  const tail = '<end_of_turn>\n<start_of_turn>model\n';
+  if (p.canvas) return [head, { imageSource: p.canvas }, tail];
+  if (p.audio) return [head, { audioSource: URL.createObjectURL(p.audio) }, tail];
+  return head + tail;
+}
+
+// Audio registrato (webm/ogg) -> WAV PCM 16 kHz mono, in base64 (formato per il motore nativo).
+async function wav16kBase64(blob) {
+  const ctx = new AudioContext();
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  await ctx.close();
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded; src.connect(off.destination); src.start();
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const buf = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
+  let bin = '';
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
 }
 
 function parseJSON(text) {
@@ -121,8 +149,22 @@ function ultimoLog() {
 
 // ---------- esecuzione con misure ----------
 
-async function genera(prompt) {
-  traccia('generazione-inizio', { tipo: Array.isArray(prompt) ? 'multimodale' : 'testo' });
+async function genera(p) {
+  traccia('generazione-inizio', { tipo: p.canvas ? 'immagine' : p.audio ? 'audio' : 'testo' });
+  if (NATIVO) {
+    const args = { text: p.testo };
+    if (p.canvas) args.imageBase64 = p.canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+    if (p.audio) args.audioBase64 = await wav16kBase64(p.audio);
+    const r = await Llm.generate(args);
+    traccia('generazione-fine', { ms: r.ms });
+    return {
+      testo: r.text, ms_totali: r.ms, ms_primo_token: r.msFirst ?? null,
+      token_ingresso: r.prefillTokens ?? null, token_uscita: r.decodeTokens ?? null,
+      token_al_sec: r.decodeTps ? +r.decodeTps.toFixed(1) : null,
+      prefill_token_al_sec: r.prefillTps ? +r.prefillTps.toFixed(1) : null,
+    };
+  }
+  const prompt = perMediaPipe(p);
   const t0 = performance.now();
   let tFirst = null;
   const out = await state.llm.generateResponse(prompt, (partial) => {
@@ -192,7 +234,14 @@ function abilita(on) {
 // ---------- 1. Ambiente ----------
 
 async function controllaAmbiente() {
-  const info = { userAgent: navigator.userAgent, data: new Date().toISOString() };
+  const info = { userAgent: navigator.userAgent, data: new Date().toISOString(), motore: NATIVO ? 'LiteRT-LM nativo' : 'MediaPipe web' };
+  if (NATIVO) {
+    try { info.dispositivo = await Llm.deviceInfo(); } catch (e) { info.dispositivo = { errore: String(e.message || e) }; }
+    info.copia_modello = await statoCopia();
+    state.results.ambiente = info;
+    $('env-out').textContent = JSON.stringify(info, null, 2);
+    return info;
+  }
   try {
     if (!navigator.gpu) throw new Error('WebGPU non disponibile');
     const adapter = await navigator.gpu.requestAdapter();
@@ -217,6 +266,9 @@ async function controllaAmbiente() {
 // ---------- 2. Modello (OPFS) ----------
 
 async function statoCopia() {
+  if (NATIVO) {
+    try { const s = await Llm.modelStatus(); return { presente: s.present, MB: s.MB }; } catch { return { presente: false }; }
+  }
   try {
     const root = await navigator.storage.getDirectory();
     const fh = await root.getFileHandle(OPFS_NAME);
@@ -247,11 +299,59 @@ async function tieniSveglio(on) {
   } catch { /* opzionale */ }
 }
 
+async function scegliModelloNativo() {
+  const out = $('model-out');
+  const prog = $('model-progress');
+  const h = await Llm.addListener('copyProgress', (e) => {
+    if (e.total > 0) { prog.hidden = false; prog.max = e.total; prog.value = e.bytes; }
+    out.textContent = `Copia del modello nella memoria dell'app: ${Math.round(e.bytes / 1e6)} MB${e.total > 0 ? ` di ${Math.round(e.total / 1e6)}` : ''}…`;
+  });
+  try {
+    traccia('copia-inizio');
+    const r = await Llm.pickModel();
+    traccia('copia-fine', { MB: r.MB, ms: r.ms });
+    out.textContent = `Copiato ${r.name} (${r.MB} MB) in ${(r.ms / 1000).toFixed(0)} s. Ora premi "Carica modello".`;
+    $('btn-load').disabled = false;
+  } catch (e) {
+    out.textContent = `Errore: ${e.message || e}`;
+  } finally {
+    prog.hidden = true;
+    h.remove();
+  }
+}
+
+async function caricaModelloNativo() {
+  const out = $('model-out');
+  const immagini = $('opt-image').checked;
+  const audio = $('opt-audio').checked;
+  const maxTokens = +$('opt-tokens').value;
+  const backend = $('opt-backend').value;
+  $('btn-load').disabled = true;
+  out.textContent = `Avvio del modello (${backend.toUpperCase()})… può richiedere fino a un minuto.`;
+  traccia('avvio-inizio', { immagini, audio, maxTokens, backend });
+  try {
+    const r = await Llm.load({ image: immagini, audio, maxTokens, backend });
+    traccia('avvio-fine', { ms: r.ms });
+    state.results.modello = { motore: 'LiteRT-LM', MB: r.MB, ms_caricamento: r.ms, immagini, audio, maxTokens, backend };
+    out.textContent = `Modello pronto in ${(r.ms / 1000).toFixed(1)} s.`;
+    abilita(true);
+  } catch (e) {
+    traccia('avvio-errore', { errore: String(e.message || e) });
+    out.textContent = `Errore: ${e.message || e}`;
+    state.results.modello = { errore: String(e.message || e) };
+  } finally {
+    $('btn-load').disabled = false;
+    aggiornaSommario();
+  }
+}
+
 async function caricaModello() {
+  if (NATIVO) return caricaModelloNativo();
   const out = $('model-out');
   $('btn-load').disabled = true;
   await tieniSveglio(true);
   try {
+    const { FilesetResolver, LlmInference } = await import(MP_URL);
     const scelto = $('model-file').files[0];
     if (scelto) {
       out.textContent = `Copio ${scelto.name} (${Math.round(scelto.size / 1e6)} MB) nella memoria della pagina…`;
@@ -394,7 +494,7 @@ async function eseguiAudio(blob) {
   const caso = idx >= 0 ? CASI_TESTO[idx] : null;
   const url = URL.createObjectURL(blob);
   try {
-    const misure = await genera(promptAudio(url));
+    const misure = await genera(promptAudio(blob));
     const parsed = parseJSON(misure.testo);
     const campi = parsed.valore.campi && typeof parsed.valore.campi === 'object' ? parsed.valore.campi : parsed.valore;
     const cmp = caso ? await confronta(campi, caso.atteso, false) : null;
@@ -412,11 +512,18 @@ async function eseguiAudio(blob) {
 
 // ---------- 6. Risultati ----------
 
-function scaricaRisultati() {
-  const blob = new Blob([JSON.stringify(state.results, null, 2)], { type: 'application/json' });
+async function scaricaRisultati() {
+  const nome = `fase0_risultati_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+  const json = JSON.stringify(state.results, null, 2);
+  if (NATIVO) {
+    try { const r = await Llm.saveToDownloads({ name: nome, content: json }); alert(`Salvato in ${r.path}`); }
+    catch (e) { alert(`Errore: ${e.message || e}`); }
+    return;
+  }
+  const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `fase0_risultati_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+  a.download = nome;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
@@ -430,9 +537,16 @@ function init() {
 
   $('btn-env').onclick = controllaAmbiente;
   $('model-file').onchange = () => { $('btn-load').disabled = !$('model-file').files.length; };
+  if (NATIVO) {
+    $('model-file').onclick = (e) => { e.preventDefault(); scegliModelloNativo(); };
+    $('model-hint').textContent = 'Seleziona gemma-3n-E2B-it-int4.litertlm (versione per app, NON "-Web") dalla cartella Download. Viene copiato una volta nella memoria dell\'app.';
+    $('backend-row').hidden = false;
+    document.querySelector('h1').textContent = 'Form Buddy · Test Fase 0 (app)';
+  }
   $('btn-load').onclick = caricaModello;
   $('btn-forget').onclick = async () => {
-    try { await (await navigator.storage.getDirectory()).removeEntry(OPFS_NAME); } catch { /* assente */ }
+    if (NATIVO) { try { await Llm.deleteModel(); } catch { /* assente */ } }
+    else { try { await (await navigator.storage.getDirectory()).removeEntry(OPFS_NAME); } catch { /* assente */ } }
     $('model-out').textContent = 'Copia salvata eliminata.';
     $('btn-load').disabled = !$('model-file').files.length;
   };
